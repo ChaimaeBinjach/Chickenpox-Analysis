@@ -1,0 +1,322 @@
+---
+title: "Spatio-Temporal Epidemiology of Chickenpox in Hungary"
+author: "Chaimae Binjach"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+    mainfont: "Georgia"  # Set the main font globally
+    serif: true     
+---
+
+
+
+# Introduction
+
+This report investigates the spatio-temporal patterns of chickenpox cases in Hungary over a period of 10 years. The analysis is based on weekly data for each of Hungary's 20 counties, covering the period from 2005 to 2015. Chickenpox, a contagious viral infection, can lead to outbreaks in both urban and rural regions. Understanding the epidemiology of chickenpox through temporal and spatial analyses is vital for developing effective public health strategies, including vaccination campaigns.
+
+**Objectives:**
+
+1. Explore long-term trends, both nationally and by county.
+2. Examine intra-annual seasonality (how chickenpox cases fluctuate throughout the year).
+3. Compare trends across counties.
+4. Investigate temporal and spatial autocorrelation in chickenpox cases.
+
+The findings of this study can help inform targeted interventions to mitigate chickenpox outbreaks in Hungary.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+ 
+
+# Load libraries
+# Data manipulation and visualization
+library(tidyverse)   # Includes dplyr, tidyr, ggplot2, etc.
+
+# Date handling
+library(lubridate)   # For manipulating dates
+
+# Spatial analysis
+library(sf)          # For spatial data
+library(spdep)        # For spatial autocorrelation analysis
+
+# Time-series analysis
+library(forecast)    # Optional, only if doing forecasting
+
+# Interactive plotting
+library(plotly)      # For interactive visualizations
+
+library(shiny) # Create a heatmap of seasonality by month and year with an improved color palette
+library(RColorBrewer)
+
+
+```
+
+
+# Data Preparation
+
+Before we begin the analysis, we need to load and inspect the datasets. The chickenpox case data is collected weekly for each of Hungary's 20 counties. The adjacency matrix provides the spatial relationships between counties, which is essential for spatial autocorrelation analysis.
+
+We will load the chickenpox data and the county adjacency matrix, inspect the structure of both datasets, and perform any necessary data cleaning or transformation.
+# Data Preparation
+
+Before we begin the analysis, we need to load and inspect the datasets. The chickenpox case data is collected weekly for each of Hungary's 20 counties. The adjacency matrix provides the spatial relationships between counties, which is essential for spatial autocorrelation analysis.
+
+We will load the chickenpox data and the county adjacency matrix, inspect the structure of both datasets, and perform any necessary data cleaning or transformation.
+
+
+
+```{r }
+# Load datasets
+chickenpox_data <- read.csv("hungary_chickenpox.csv")
+county_edges <- read.csv("hungary_county_edges.csv")
+
+# Inspect datasets
+head(chickenpox_data)
+head(county_edges)
+
+# Check structure of the datasets
+str(chickenpox_data)
+str(county_edges)
+
+summary(chickenpox_data)
+
+
+
+# Data cleaning (if necessary)
+# Ensure Date is in proper format and handle missing values
+chickenpox_data$Date <- as.Date(chickenpox_data$Date, format = "%d/%m/%Y")
+chickenpox_data[is.na(chickenpox_data)] <- 0  # Replace missing values with 0 for cases
+
+```
+
+# National Trends
+
+To understand the overall pattern of chickenpox cases across Hungary, we will sum the weekly cases from all counties and plot the national trend. This will give us a sense of the long-term trends in chickenpox cases across the entire country.
+
+
+```{r }
+# Calculate national trend by summing cases across counties
+national_trend <- chickenpox_data %>%
+  select(-Date) %>%
+  rowSums() %>%
+  data.frame(Date = chickenpox_data$Date, Total_cases = .)
+
+# Plot the national trend
+ggplot(national_trend, aes(x = Date, y = Total_cases)) +
+  geom_line(color = "blue") +
+  labs(title = "National Trend of Chickenpox Cases in Hungary (2005-2015)",
+       x = "Year", y = "Total Cases") +
+  theme_minimal()
+
+
+
+```
+
+# Seasonality Analysis
+
+By examining the total cases per month across all years, we can observe if there are any seasonal fluctuations in chickenpox cases. This type of analysis helps in identifying peak periods, which could inform vaccination campaigns or other public health initiatives.
+
+```{r }
+# Extract month from the Date column
+national_trend$Month <- month(national_trend$Date)
+
+# Summarize cases by month
+monthly_trend <- national_trend %>%
+  group_by(Month) %>%
+  summarise(Total_cases = sum(Total_cases))
+
+# Plot monthly seasonality
+ggplot(monthly_trend, aes(x = Month, y = Total_cases)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  labs(title = "Seasonality of Chickenpox Cases (2005-2015)",
+       x = "Month", y = "Total Cases") +
+  scale_x_continuous(breaks = 1:12, labels = month.name) +
+  theme_minimal()
+
+
+
+```
+
+
+# Interactive County-Level Comparison (Large Display)
+
+To compare chickenpox trends interactively, we provide a large and advanced plot where users can click on the legend to isolate specific counties or hover over the data points for details.
+
+
+
+
+```{r }
+
+# Select all counties to compare
+all_counties <- colnames(chickenpox_data)[2:ncol(chickenpox_data)]  # Extract all county names
+
+# Reshape data for comparison
+county_comparison_all <- chickenpox_data %>%
+  select(Date, all_of(all_counties)) %>%
+  pivot_longer(cols = -Date, names_to = "County", values_to = "Cases")
+
+# Create an interactive plot using plotly
+plot <- ggplot(county_comparison_all, aes(x = as.Date(Date, "%d/%m/%Y"), y = Cases, color = County)) +
+  geom_line() +
+  labs(title = "Interactive Comparison of Chickenpox Cases by County (2005-2015)",
+       x = "Date", y = "Cases") +
+  theme_minimal() +
+  theme(legend.position = "right", legend.title = element_text(size = 10), legend.text = element_text(size = 8))
+
+# Convert ggplot to plotly
+interactive_plot <- ggplotly(plot) %>%
+  layout(
+    title = list(text = "<b>Interactive Comparison of Chickenpox Cases by County (2005-2015)</b>"),
+    legend = list(title = list(text = "<b>Select Counties</b>")),
+    width = 950,  # Set the width of the plot
+    height = 650   # Set the height of the plot
+  )
+
+# Display the interactive plot
+interactive_plot
+
+
+```
+
+# Temporal Autocorrelation Analysis
+
+To understand how chickenpox cases are temporally correlated, we compute and visualize the autocorrelation function (ACF) for selected counties. This will help us detect patterns, such as seasonality or persistence in outbreaks.
+
+```{r }
+# Select a county (e.g., BUDAPEST) for analysis
+selected_county <- "BUDAPEST"
+
+# Extract data for the selected county
+county_ts <- ts(chickenpox_data[[selected_county]], frequency = 52)  # Weekly data (52 weeks/year)
+
+# Compute and plot ACF
+acf_plot <- ggAcf(county_ts, lag.max = 104) +  # Analyze up to 2 years (104 weeks)
+  labs(title = paste("Temporal Autocorrelation of Chickenpox Cases in", selected_county),
+       x = "Lag (weeks)", y = "ACF") +
+  theme_minimal()
+
+acf_plot
+
+```
+
+# Spatial Autocorrelation Analysis
+
+Spatial autocorrelation is assessed using Moran's I to determine whether chickenpox cases in one county are similar to those in neighboring counties.
+
+```{r }
+# Extract all unique county names
+all_counties <- unique(c(county_edges$name_1, county_edges$name_2))
+
+# Initialize a square adjacency matrix
+adjacency_matrix <- matrix(0, nrow = length(all_counties), ncol = length(all_counties),
+                           dimnames = list(all_counties, all_counties))
+
+# Fill the adjacency matrix with 1 where there is an edge
+for (i in 1:nrow(county_edges)) {
+  row <- county_edges$name_1[i]
+  col <- county_edges$name_2[i]
+  adjacency_matrix[row, col] <- 1
+  adjacency_matrix[col, row] <- 1  # Ensure symmetry
+}
+
+# Convert to a spatial weights list
+weights <- mat2listw(adjacency_matrix, style = "W")
+
+# Compute county-level totals for chickenpox cases
+county_totals <- chickenpox_data %>%
+  select(-Date) %>%
+  colSums()
+
+# Run Moran's I test
+moran_test <- moran.test(county_totals, weights)
+
+# Display Moran's I results
+cat("Moran's I: ", moran_test$estimate[1], "\n")
+cat("P-value: ", moran_test$p.value, "\n")
+
+
+```
+
+# Weekly Heatmap of Chickenpox Cases by County (2005-2015)
+
+Description:
+This script generates a heatmap to visualize the weekly distribution of chickenpox cases across the 20 counties in Hungary over a 10-year period (2005-2015). The data is first reshaped to include weekly totals per county. Each tile in the heatmap represents the total cases for a specific week and county, with color intensity indicating the number of cases. The visualization helps identify temporal and spatial patterns, such as peaks and hotspots of chickenpox outbreaks.
+
+
+```{r }
+# Reshape data to get weekly cases for each county
+heatmap_data <- chickenpox_data %>%
+  select(Date, all_of(all_counties)) %>%
+  pivot_longer(cols = -Date, names_to = "County", values_to = "Cases") %>%
+  mutate(Week = week(as.Date(Date, "%d/%m/%Y")),
+         Year = year(as.Date(Date, "%d/%m/%Y")))
+
+# Calculate the sum of cases per week for each county
+heatmap_data <- heatmap_data %>%
+  group_by(Year, Week, County) %>%
+  summarise(Total_cases = sum(Cases)) %>%
+  ungroup()
+
+# Create a heatmap plot
+heatmap_plot <- ggplot(heatmap_data, aes(x = Week, y = County, fill = Total_cases)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "brown") +
+  labs(title = "Heatmap of Chickenpox Cases by County and Week (2005-2015)",
+       x = "Week of Year", y = "County", fill = "Total Cases") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))  # Rotate x-axis labels for clarity
+
+# Display the heatmap
+heatmap_plot
+
+```
+
+# Monthly Heatmap of Chickenpox Cases by Countyc
+
+Description:
+This script creates a detailed heatmap visualizing the monthly distribution of chickenpox cases across Hungary's counties over multiple years. The data is aggregated to show total cases for each month and year, organized by county. Each subplot represents a county, with colors indicating case intensity using the "YlOrRd" palette for better distinction of peaks. This visualization highlights intra-annual seasonality and temporal patterns of chickenpox outbreaks, offering insights into seasonal trends within each county.
+
+```{r }
+# Calculate total cases by year and month for each county
+seasonality_data <- chickenpox_data %>%
+  select(Date, all_of(all_counties)) %>%
+  pivot_longer(cols = -Date, names_to = "County", values_to = "Cases") %>%
+  mutate(Year = year(as.Date(Date, "%d/%m/%Y")),
+         Month = month(as.Date(Date, "%d/%m/%Y"))) %>%
+  group_by(Year, Month, County) %>%
+  summarise(Total_cases = sum(Cases)) %>%
+  ungroup()
+
+
+
+ggplot(seasonality_data, aes(x = Month, y = Year, fill = Total_cases)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = brewer.pal(9, "YlOrRd")) +  # Using the YlOrRd palette for the color scale
+  facet_wrap(~ County, scales = "free_y") +
+  labs(title = "Heatmap of Monthly Chickenpox Cases by County",
+       x = "Month", y = "Year", fill = "Total Cases") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(size = 10))  # Adjust size of facet labels for better readability
+
+
+
+
+
+```
+
+
+# Conclusion:
+
+This study examined the spatio-temporal patterns of chickenpox cases in Hungary over a 10-year period. The analysis revealed clear trends in the spread and intensity of outbreaks, both nationally and across individual counties. Seasonal patterns were evident, with cases peaking during specific months, indicating strong intra-annual seasonality. The comparison across counties showed differences in case numbers, suggesting that some regions experienced higher or more frequent outbreaks than others. 
+
+Temporal and spatial autocorrelation analyses further highlighted how chickenpox cases were influenced by both time and location, indicating clusters of outbreaks that followed predictable patterns. These insights can support public health strategies, such as targeted vaccination campaigns, to reduce the spread of chickenpox in high-risk areas and during peak seasons. Overall, the findings emphasize the importance of combining spatial and temporal data for understanding disease dynamics and improving healthcare planning..
+
+
+
+
+
+
